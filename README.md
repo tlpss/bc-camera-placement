@@ -1,0 +1,1 @@
+# bc-camera-placement
