@@ -8,9 +8,15 @@ dependencies = [
     #"mani-skill>=3.0.0b21",
     "pyglet==1.5.31",
     "metaworld @ file:///${PROJECT_ROOT}/Metaworld",
-    "lerobot @ file:///${PROJECT_ROOT}/lerobot"
+    "lerobot @ file:///${PROJECT_ROOT}/lerobot",
+    "matplotlib>=3.10.3",
 ]
 
 [tool.setuptools]
 packages = ["camera_placement"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
 
