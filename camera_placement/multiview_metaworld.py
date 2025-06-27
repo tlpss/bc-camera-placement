@@ -105,13 +105,13 @@ class MultiViewMetaworldEnv(gym.Wrapper):
         obs = self._build_obs(obs)
         return obs, info
     
-    def render(self, mode="human"):
-        """Render the environment using the first camera config in human mode."""
+    def render(self):
         if not self.cameras_config:
             raise RuntimeError("No camera configs available for rendering.")
         first_uid = self.cameras_config[0].uid
         renderer = self.renderers[first_uid]
-        return renderer.render(render_mode="human")
+        return renderer.render(render_mode="rgb_array")
+
 
 
 from metaworld import ALL_V3_ENVIRONMENTS

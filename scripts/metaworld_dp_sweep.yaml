@@ -1,0 +1,46 @@
+program: scripts/metaworld_dp_hparam_search.py
+command:
+  - uv
+  - run
+  - --prerelease=allow
+  - ${program}
+method: random
+metric:
+  name: eval/pc_success
+  goal: maximize
+parameters:
+  env_name:
+    value: "assembly-v3"
+  seed:
+    values: [2025, 2026, 2027, 2028, 2029]
+  n_demonstrations:
+    value: 150
+  
+  # Diffusion Policy hyperparameters
+  dp_action_steps:
+    min: 6
+    max: 14
+  dp_horizon:
+    values: [16]
+  dp_down_dims:
+    values:
+      - [512, 1024, 2048]
+      - [256, 512, 1024]
+      - [128, 256, 512]
+      - [64, 128, 256]
+      - [32, 64, 128]
+      - [16, 32, 64]
+  dp_kernel_size:
+    values: [3, 5,]
+  dp_diffusion_step_embed_dim:
+    values: [64, 128,]
+  dp_optimizer_lr:
+    values: [1e-5, 5e-5, 1e-4, 2e-4, 3e-4, 5e-4]
+  
+  # Training hyperparameters
+  n_steps:
+    value: 100000
+  eval_freq:
+    value: 10000
+  log_freq:
+    value: 500 

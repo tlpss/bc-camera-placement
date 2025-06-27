@@ -4,16 +4,15 @@ from pathlib import Path
 from lerobot.common.envs.configs import EnvConfig
 from lerobot.common.utils.utils import init_logging
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.common.policies.act.configuration_act import ACTConfig
+from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.configs.default import DatasetConfig, EvalConfig, WandBConfig
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.scripts.train import train
 import gymnasium
 
-from metaworld.policies.sawyer_reach_v3_policy import SawyerReachV3Policy
 from camera_placement.lerobot_dataset_recorder import LeRobotDatasetRecorder, collect_demonstrations_non_blocking
-from camera_placement.multiview_metaworld import DEFAULT_CAMERAS_CONFIG
+from camera_placement.multiview_metaworld import DEFAULT_CAMERAS_CONFIG, ENV_POLICY_MAP, CameraConfig
 
 import os 
 import shutil
@@ -32,8 +31,8 @@ class MetaWorldMultiviewConfig(EnvConfig):
     task:str = "multiview"
     metaworld_env: str = "reach-v3"
     fps: int = 10
-    max_episode_steps: int = 100
-    cameras_config: list[dict] = field(default_factory=lambda: DEFAULT_CAMERAS_CONFIG)
+    max_episode_steps: int = 250
+    cameras_config: list[CameraConfig] = field(default_factory=lambda: DEFAULT_CAMERAS_CONFIG)
     
     features: dict[str, PolicyFeature] = field(
         default_factory=lambda: {
@@ -50,121 +49,154 @@ class MetaWorldMultiviewConfig(EnvConfig):
 
     def __post_init__(self):
         for camera_config in self.cameras_config:
-            self.features[f"pixels/{camera_config['uid']}"] = PolicyFeature(type=FeatureType.VISUAL, shape=(3,camera_config["width"], camera_config["height"]))
-            self.features_map[f"pixels/{camera_config['uid']}"] = f"observation.images.{camera_config['uid']}"
+            self.features[f"pixels/{camera_config.uid}"] = PolicyFeature(type=FeatureType.VISUAL, shape=(3,camera_config.width, camera_config.height))
+            self.features_map[f"pixels/{camera_config.uid}"] = f"observation.images.{camera_config.uid}"
     
     
     @property
     def gym_kwargs(self) -> dict:
         return {
             "metaworld_env_name": self.metaworld_env,
-            "camera_configs": self.cameras_config,
+            "cameras_config": self.cameras_config,
             "render_mode": "rgb_array",
             "max_episode_steps": self.max_episode_steps,
         }
     
 
-def run(seed,env,env_config: EnvConfig,demonstrator_callable):
+@dataclass
+class Config:
+    env_name: str = "reach-v3"
+    seed: int = 2025
+    n_demonstrations: int = 2
+
+    dp_action_steps: int = 8
+    dp_horizon: int = 16
+    dp_down_dims: tuple[int, ...] = (512, 1024, 2048)
+    dp_kernel_size: int = 5
+    dp_n_groups: int = 8
+    dp_diffusion_step_embed_dim: int = 128
+    dp_optimizer_lr: float = 1e-4
+
+    n_steps: int = 100_000
+    eval_freq: int = 10_000
+    log_freq: int = 1000
+
+
+def run(config: Config):
+
+    policy = ENV_POLICY_MAP[config.env_name]()
+    def action_callable(env):
+        return policy.get_action(env.unwrapped._get_obs())
+    
+    
     os.makedirs("tmp/dataset/mwmv", exist_ok=True)
-    dataset_path = f"tmp/dataset/mwmv/{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+    dataset_path = Path(f"tmp/dataset/mwmv/{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}")
     ## create dataset and store
-
+    env_config = MetaWorldMultiviewConfig(
+        metaworld_env=config.env_name,
+    )
   
-    env.reset()
-    dataset_recorder = LeRobotDatasetRecorder(env,dataset_path,f"tlips/metaworld-mv",10,True)
-    collect_demonstrations_non_blocking(demonstrator_callable, env, dataset_recorder, n_episodes=2)
+    env = gymnasium.make("Meta-World/multiview", **env_config.gym_kwargs)
+    env.reset(seed=config.seed)
 
-    camera_config=env_config.camera_configs[0],
+    dataset_recorder = LeRobotDatasetRecorder(env, dataset_path, f"tlips/metaworld-mv", 10, True)
+    collect_demonstrations_non_blocking(action_callable, env, dataset_recorder, n_episodes=config.n_demonstrations)
+
     input_features = {}
-    for camera_config in env_config.camera_configs:
-        input_features[f"observation.images.{camera_config['uid']}"] = PolicyFeature(type=FeatureType.VISUAL, shape=(camera_config["height"],camera_config["width"], 3))
-    input_features["observation.state"] = PolicyFeature(type=FeatureType.STATE, shape=(4,))
+    for camera_config in env_config.cameras_config:
+        input_features[f"observation.images.{camera_config.uid}"] = PolicyFeature(type=FeatureType.VISUAL, shape=(camera_config.height, camera_config.width, 3))
     input_features["observation.state"] = PolicyFeature(type=FeatureType.STATE, shape=(4,))
     output_features = {
         "action": PolicyFeature(type=FeatureType.ACTION, shape=(4,)),
     }
 
-    config = TrainPipelineConfig(
-        dataset=DatasetConfig(repo_id="whatever/whatever", root=dataset_path),
-        policy=ACTConfig(
-            device='cpu',
-            n_obs_steps=1,
-            chunk_size=20,
-            n_action_steps=10,
+    train_config = TrainPipelineConfig(
+        dataset=DatasetConfig(repo_id="whatever/whatever", root=str(dataset_path)),
+        # policy=ACTConfig(
+        #     device='cpu',
+        #     n_obs_steps=1,
+        #     chunk_size=20,
+        #     n_action_steps=10,
+        #     input_features=input_features,
+        #     output_features=output_features,
+        #     dim_feedforward=1024,
+        #     dim_model=512,
+        #     optimizer_lr=2e-5,
+
+        #     ),
+        policy = DiffusionConfig(
+            push_to_hub=False,
+            repo_id="whatever/whatever",
+            n_obs_steps=2,
+            n_action_steps=config.dp_action_steps,
+            horizon=config.dp_horizon,
             input_features=input_features,
             output_features=output_features,
-            dim_feedforward=1024,
-            dim_model=512,
-            optimizer_lr=2e-5,
-
-            ),
-
+            device='cuda',
+            crop_shape=(84,112),
+            crop_is_random=False,
+            down_dims=config.dp_down_dims,
+            kernel_size=config.dp_kernel_size,
+            n_groups=config.dp_n_groups,
+            diffusion_step_embed_dim=config.dp_diffusion_step_embed_dim,
+            optimizer_lr=config.dp_optimizer_lr,
+            
+            
+        ),
         eval=EvalConfig(n_episodes=20, batch_size=10),
         env=env_config,
         wandb=WandBConfig(enable=True, disable_artifact=True,project="camera-placement"),
         output_dir=Path(f"tmp/outputs/train/{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"), 
-        job_name=f"metaworld-{env_config.task}-cam-az={camera_config['azimuth']}-el={camera_config['elevation']}-dist={camera_config['distance']}",
+        job_name=f"metaworld-sweep",
         resume=False,
-        seed=seed,
+        seed=config.seed,
         num_workers=4,
         batch_size=64,
-        steps=100_000,
-        eval_freq=100,
-        log_freq=100,
-        save_freq=100_000
+        steps=config.n_steps,
+        eval_freq=config.eval_freq,
+        log_freq=config.log_freq,
+        save_freq=config.n_steps
     )
 
     # train policy
+    wandb.config.update(vars(train_config))
+    print(train_config)
+    train(train_config)
 
-    print(config)
-    train(config)
+    # remove temp dataset
+    shutil.rmtree(dataset_path)
 
-
-# load the latest checkpoint and eval further?
 
 
 if __name__ == "__main__":
-    import numpy as np 
-    look_at_position = [0.0, 0.7, 0.1] # approx average of object spawn space for many tasks 
-
-    camera_configs = [
-        [
-            {
-                "uid": "scene",
-                "width": 256,
-                "height": 256,
-                "lookat": look_at_position,
-                "distance": 0.6,
-                "azimuth": 0,
-                "elevation": 45,
-                "fovy": 45,
-            }
-        ]
-    ]
-
-    seed = 2025
-    env_name = "reach-v3"
-    policy = SawyerReachV3Policy()
-    def action_callable(env):
-        return policy.get_action(env.unwrapped._get_obs())
-    
 
     # create new wandb run
+    config = Config()
     import wandb 
-    # check if run is active, if so, finish it
-    for seed in [2025]: #,2026,2027]:
-        for camera_position_config in camera_configs:
-            env_config = MetaWorldMultiviewConfig(
-                metaworld_env=env_name,
-                cameras_config=camera_position_config,
-            )
-            env = gymnasium.make("Meta-World/multiview", **env_config.gym_kwargs)
-            env.reset(seed=seed)
-            if wandb.run is not None:
-                print("Wandb run is active, finishing it...")
-                wandb.finish()
-            print(f"Running for env: {env_name} with camera config: {camera_position_config} and seed: {seed}")
-            init_logging()
+    wandb.init(project="camera-placement", name="metaworld-DP-sweep", config=vars(config))
+    # updated config with wandb config
+    config = Config(**wandb.config)
+    run(config)
 
 
-            run(seed,env,env_config,action_callable)
+    # # wandb sweep config 
+    # # sweep config 
+    # sweep_config = {
+    #     "program": "scripts/metaworld_train_lerobot_dp.py",
+    #     "command": [
+    #         "uv run --prerelease=allow",
+    #         "${program}"
+    #     ],
+    #     "method": "random",
+    #     "parameters": {
+    #         "dp_action_steps": {"min": 6 ,"max": 10},
+    #         "dp_horizon": {"values": [10, 12, 14, 16, 18, 20]},
+    #         "dp_down_dims": {"values": [(512, 1024, 2048), (256, 512, 1024), (128, 256, 512), (64, 128, 256)]},
+    #         "dp_kernel_size": {"values": [3, 5]},
+    #         "dp_n_groups": {"min": 4, "max": 16},
+    #         "dp_diffusion_step_embed_dim": {"values": [64,128]},
+    #         "dp_optimizer_lr": {"values": [1e-4, 2e-4, 3e-4,5e-5]},
+    #         "seed": {"values": [2025, 2026, 2027]},
+    #     }
+    # }
+    # wandb.sweep(sweep_config, project="camera-placement", name="metaworld-DP-sweep")
