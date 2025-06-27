@@ -167,10 +167,10 @@ if __name__ == "__main__":
     from metaworld.policies.sawyer_button_press_topdown_wall_v3_policy import SawyerButtonPressTopdownWallV3Policy
     if os.path.exists("data/lerobot/multiview_test"):
         shutil.rmtree("data/lerobot/multiview_test")
-    from camera_placement.multiview_metaworld import DEFAULT_CAMERA_CONFIGS
+    from camera_placement.multiview_metaworld import DEFAULT_CAMERAS_CONFIG
 
     policy = SawyerButtonPressTopdownWallV3Policy()
-    env = gym.make("Meta-World/multiview", metaworld_env_name="button-press-topdown-wall-v3", camera_configs=DEFAULT_CAMERA_CONFIGS)
+    env = gym.make("Meta-World/multiview", metaworld_env_name="button-press-topdown-wall-v3", cameras_config=DEFAULT_CAMERAS_CONFIG)
 
     dataset_recorder = LeRobotDatasetRecorder(env, Path("data/lerobot/multiview_test"), "multiview_test", 10, use_videos=True)
 
