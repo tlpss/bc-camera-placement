@@ -31,7 +31,7 @@ class MetaWorldMultiviewConfig(EnvConfig):
     task:str = "multiview"
     metaworld_env: str = "reach-v3"
     fps: int = 10
-    max_episode_steps: int = 250
+    max_episode_steps: int = 200
     cameras_config: list[CameraConfig] = field(default_factory=lambda: DEFAULT_CAMERAS_CONFIG)
     
     features: dict[str, PolicyFeature] = field(
@@ -67,7 +67,7 @@ class MetaWorldMultiviewConfig(EnvConfig):
 class Config:
     env_name: str = "reach-v3"
     seed: int = 2025
-    n_demonstrations: int = 2
+    n_demonstrations: int = 150
 
     dp_action_steps: int = 8
     dp_horizon: int = 16
@@ -78,7 +78,7 @@ class Config:
     dp_optimizer_lr: float = 1e-4
 
     n_steps: int = 100_000
-    eval_freq: int = 10_000
+    eval_freq: int = 5000
     log_freq: int = 1000
 
 
@@ -95,7 +95,7 @@ def run(config: Config):
     env_config = MetaWorldMultiviewConfig(
         metaworld_env=config.env_name,
     )
-  
+
     env = gymnasium.make("Meta-World/multiview", **env_config.gym_kwargs)
     env.reset(seed=config.seed)
 
@@ -112,18 +112,6 @@ def run(config: Config):
 
     train_config = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="whatever/whatever", root=str(dataset_path)),
-        # policy=ACTConfig(
-        #     device='cpu',
-        #     n_obs_steps=1,
-        #     chunk_size=20,
-        #     n_action_steps=10,
-        #     input_features=input_features,
-        #     output_features=output_features,
-        #     dim_feedforward=1024,
-        #     dim_model=512,
-        #     optimizer_lr=2e-5,
-
-        #     ),
         policy = DiffusionConfig(
             push_to_hub=False,
             repo_id="whatever/whatever",
@@ -174,29 +162,6 @@ if __name__ == "__main__":
     config = Config()
     import wandb 
     wandb.init(project="camera-placement", name="metaworld-DP-sweep", config=vars(config))
-    # updated config with wandb config
+    # updated config with wandb config in case of sweep
     config = Config(**wandb.config)
     run(config)
-
-
-    # # wandb sweep config 
-    # # sweep config 
-    # sweep_config = {
-    #     "program": "scripts/metaworld_train_lerobot_dp.py",
-    #     "command": [
-    #         "uv run --prerelease=allow",
-    #         "${program}"
-    #     ],
-    #     "method": "random",
-    #     "parameters": {
-    #         "dp_action_steps": {"min": 6 ,"max": 10},
-    #         "dp_horizon": {"values": [10, 12, 14, 16, 18, 20]},
-    #         "dp_down_dims": {"values": [(512, 1024, 2048), (256, 512, 1024), (128, 256, 512), (64, 128, 256)]},
-    #         "dp_kernel_size": {"values": [3, 5]},
-    #         "dp_n_groups": {"min": 4, "max": 16},
-    #         "dp_diffusion_step_embed_dim": {"values": [64,128]},
-    #         "dp_optimizer_lr": {"values": [1e-4, 2e-4, 3e-4,5e-5]},
-    #         "seed": {"values": [2025, 2026, 2027]},
-    #     }
-    # }
-    # wandb.sweep(sweep_config, project="camera-placement", name="metaworld-DP-sweep")
