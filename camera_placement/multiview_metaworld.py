@@ -34,13 +34,15 @@ class MetaWorldProprioceptiveStateWrapper(gym.Wrapper):
             high=self.env.observation_space.high[:4], 
             dtype=np.float64
         )
-    
+
+        # update render_fps of underlying env to 10 FPS
+        self.unwrapped.metadata["render_fps"] = 10
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         # Transform observation to only include agent position
         obs = obs[:4]  # only add the proprioceptive state of the robot
         terminated = info["success"] == 1.0  # somehow MetaWorld never returns termination conditions, I use it differently.
-
+        info["is_success"] = info["success"] == 1.0 # Lerobot expects this key for evaluation.
         return obs, reward, terminated, truncated, info
     
     def reset(self, **kwargs):
