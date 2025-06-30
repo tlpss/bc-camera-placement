@@ -216,3 +216,17 @@ if __name__ == "__main__":
     for uid, render in new_camera_renders.items():
         if not np.allclose(render, camera_renders[uid]):
             print(f"camera {uid} has changed")
+
+
+    # test throughput 
+
+    import time 
+    start_time = time.time()
+    for i in range(1000):
+        obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+        if terminated or truncated:
+            obs, info = env.reset()
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
+
+    print(f"Time per step: {(end_time - start_time) / 1000} seconds")
