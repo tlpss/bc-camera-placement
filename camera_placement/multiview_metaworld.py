@@ -23,6 +23,31 @@ class CameraConfig:
     fovy: float = 45.0
 
 
+
+class MetaWorldAbsoluteActionWrapper(gym.Wrapper):
+    """Wrapper to convert MetaWorld relative action interface to absolute action interface."""
+    def __init__(self, env):
+        super().__init__(env)
+
+    def step(self, action):
+        # get the current position of the robot
+        current_pos = self.unwrapped._get_obs()[:3]
+        relative_action = action[:3] - current_pos
+        relative_action = relative_action*100
+
+        absolute_action = np.concatenate([relative_action, action[3:]])
+        return self.env.step(absolute_action)
+
+
+def get_abs_policy_action(policy, env):
+    current_robot_pos = env.unwrapped._get_obs()[:3]
+    relative_action = policy.get_action(env.unwrapped._get_obs())
+    absolute_robot_action = current_robot_pos + relative_action[:3]/100 
+    gripper_action = relative_action[3]
+    absolute_action = np.concatenate([absolute_robot_action, [gripper_action]])
+    return absolute_action
+
+
 class MetaWorldProprioceptiveStateWrapper(gym.Wrapper):
     """Wrapper that propagates only proprioceptive state information from MetaWorld environments."""
     
@@ -35,8 +60,6 @@ class MetaWorldProprioceptiveStateWrapper(gym.Wrapper):
             dtype=np.float64
         )
 
-        # update render_fps of underlying env to 10 FPS
-        self.unwrapped.metadata["render_fps"] = 10
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         # Transform observation to only include agent position
@@ -123,6 +146,8 @@ def entry_point(**kwargs):
     env_id = kwargs.pop("metaworld_env_name",None)
     assert env_id in ALL_V3_ENVIRONMENTS, f"env_id must be one of {ALL_V3_ENVIRONMENTS}"
     cameras_config = kwargs.pop("cameras_config",None)
+
+    use_absolute_action_space = kwargs.pop("abs_action_space",False)
     if not env_id:
         raise ValueError("metaworld_env_name must be provided")
     if not cameras_config:
@@ -140,6 +165,9 @@ def entry_point(**kwargs):
     
     # Apply multiview wrapper
     env = MultiViewMetaworldEnv(env, cameras_config)
+
+    if use_absolute_action_space:
+        env = MetaWorldAbsoluteActionWrapper(env)
     
     return env
 
@@ -230,3 +258,15 @@ if __name__ == "__main__":
     print(f"Time taken: {end_time - start_time} seconds")
 
     print(f"Time per step: {(end_time - start_time) / 1000} seconds")
+
+
+    # test policy
+    from metaworld.policies import ENV_POLICY_MAP
+    policy = ENV_POLICY_MAP["reach-v3"]()
+    obs, info = env.reset()
+    for i in range(10):
+        print(f"obs: {obs["agent_pos"]}")
+        action = policy.get_action(env.unwrapped._get_obs())
+        print(f"action: {action}")
+        obs, reward, terminated, truncated, info = env.step(action)
+

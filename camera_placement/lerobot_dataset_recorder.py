@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from camera_placement.multiview_metaworld import MetaWorldAbsoluteActionWrapper, get_abs_policy_action
+
 class LeRobotDatasetRecorder:
     """
     Gym dataset recorder for LeRobot.
@@ -172,8 +174,10 @@ if __name__ == "__main__":
     policy = ENV_POLICY_MAP[env_name]()
     env = gym.make("Meta-World/multiview", metaworld_env_name=env_name, cameras_config=DEFAULT_CAMERAS_CONFIG,max_episode_steps=250)
 
-    dataset_recorder = LeRobotDatasetRecorder(env, Path("data/lerobot/multiview_test"), "multiview_test", 10, use_videos=True)
+    env = MetaWorldAbsoluteActionWrapper(env)
+    dataset_recorder = LeRobotDatasetRecorder(env, Path("data/lerobot/multiview_test"), "multiview_test", 80, use_videos=True)
 
     def action_callable(env):
+        return get_abs_policy_action(policy, env)
         return policy.get_action(env.unwrapped._get_obs())
     collect_demonstrations_non_blocking(action_callable, env, dataset_recorder, n_episodes=10)
