@@ -1,30 +1,38 @@
 from dataclasses import dataclass, field
-import multiprocessing
+import os
+import shutil
+import datetime
+import gymnasium
+import wandb
 from pathlib import Path
-from lerobot.common.envs.configs import EnvConfig
-from lerobot.common.utils.utils import init_logging
+from camera_placement import DATA_DIR
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.configs.default import DatasetConfig, EvalConfig, WandBConfig
-
 from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.common.envs.configs import EnvConfig
 from lerobot.scripts.train import train
-import gymnasium
-
 from camera_placement.lerobot_dataset_recorder import LeRobotDatasetRecorder, collect_demonstrations_non_blocking
-from camera_placement.multiview_metaworld import DEFAULT_CAMERAS_CONFIG, ENV_POLICY_MAP, CameraConfig, get_abs_policy_action
+from camera_placement.multiview_metaworld import  DEFAULT_CAMERAS_CONFIG, get_abs_policy_action, CameraConfig, ENV_POLICY_MAP
+from camera_placement.metaworld_viewpoints import METAWORLD_CAMERA_VIEWPOINT_CONFIGS
 
-import os 
-import shutil
-import datetime
+CAMERA_SCENARIO_ID_TO_CONFIG = { i : METAWORLD_CAMERA_VIEWPOINT_CONFIGS[i] for i in range(len(METAWORLD_CAMERA_VIEWPOINT_CONFIGS))}
+@dataclass
+class Config:
+    env_name: str = "assembly-v3"
+    seed: int = 2025
+    n_demonstrations: int = 10
+    camera_scenario_id: int = 0 # wandb cannot handle specific combinations, so sweep over ID..
 
-# if os.path.exists("tmp/dataset/robot_push_button"):
-#     shutil.rmtree("tmp/dataset/robot_push_button")
 
-# if os.path.exists("tmp/outputs/train"):
-#     shutil.rmtree("tmp/outputs/train")
+    n_steps: int = 100_000
+    eval_freq: int = 50
+    log_freq: int = 1000
 
- ## training
+    def wandb_name(self) -> str:
+        return f"{self.env_name}-{self.camera_scenario_id}"
+
+
 @EnvConfig.register_subclass("Meta-World")
 @dataclass
 class MetaWorldMultiviewConfig(EnvConfig):
@@ -64,82 +72,66 @@ class MetaWorldMultiviewConfig(EnvConfig):
         }
     
 
-@dataclass
-class Config:
-    env_name: str = "assembly-v3"
-    seed: int = 2025
-    n_demonstrations: int = 150
-
-    dp_action_steps: int = 40
-    dp_horizon: int = 80
-    dp_down_dims: tuple[int, ...] = (512, 1024, 2048)
-    dp_kernel_size: int = 3
-    dp_n_groups: int = 8
-    dp_diffusion_step_embed_dim: int = 128
-    dp_optimizer_lr: float = 1e-4
-
-    # dp_n_inference_steps: int = 100
-    # dp_noise_schedule: str = "DDIM"
-
-    n_steps: int = 100_000
-    eval_freq: int = 1000
-    log_freq: int = 1000
-
 
 def run(config: Config):
+    # Select the camera config based on scenario id
+    camera_config = CAMERA_SCENARIO_ID_TO_CONFIG[config.camera_scenario_id]
+    
+    # Prepare environment config with single camera
+    env_config = MetaWorldMultiviewConfig(
+        metaworld_env=config.env_name,
+        cameras_config=[camera_config],
+    )
 
+    # Prepare policy
     policy = ENV_POLICY_MAP[config.env_name]()
     def action_callable(env):
         return get_abs_policy_action(policy, env)
-    
-    
-    os.makedirs("tmp/dataset/mwmv", exist_ok=True)
-    dataset_path = Path(f"tmp/dataset/mwmv/{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}")
-    ## create dataset and store
-    env_config = MetaWorldMultiviewConfig(
-        metaworld_env=config.env_name,
-    )
 
+    # Use new output directory for datasets and artifacts
+    base_data_dir = DATA_DIR / "metaworld" / "single-camera-sweep"
+    os.makedirs(base_data_dir / "dataset", exist_ok=True)
+    dataset_path = base_data_dir / "dataset" / datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+
+    # Create environment and collect demonstrations
     env = gymnasium.make("Meta-World/multiview", **env_config.gym_kwargs)
     env.reset(seed=config.seed)
-
-    dataset_recorder = LeRobotDatasetRecorder(env, dataset_path, f"tlips/metaworld-mv", 80, True)
+    dataset_recorder = LeRobotDatasetRecorder(env, dataset_path, f"tlips/metaworld-single", 80, True)
     collect_demonstrations_non_blocking(action_callable, env, dataset_recorder, n_episodes=config.n_demonstrations)
 
-    input_features = {}
-    for camera_config in env_config.cameras_config:
-        input_features[f"observation.images.{camera_config.uid}"] = PolicyFeature(type=FeatureType.VISUAL, shape=(camera_config.height, camera_config.width, 3))
-    input_features["observation.state"] = PolicyFeature(type=FeatureType.STATE, shape=(4,))
+    # Build input/output features for single camera
+    input_features = {
+        f"observation.images.{camera_config.uid}": PolicyFeature(type=FeatureType.VISUAL, shape=(camera_config.height, camera_config.width, 3)),
+        "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(4,)),
+    }
     output_features = {
         "action": PolicyFeature(type=FeatureType.ACTION, shape=(4,)),
     }
 
     train_config = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="whatever/whatever", root=str(dataset_path)),
-        policy = DiffusionConfig(
+        policy=DiffusionConfig(
             push_to_hub=False,
             repo_id="whatever/whatever",
             n_obs_steps=2,
-            n_action_steps=config.dp_action_steps,
-            horizon=config.dp_horizon,
+            n_action_steps=40,
+            horizon=80,
             input_features=input_features,
             output_features=output_features,
             device='cuda',
             crop_shape=(84,112),
             crop_is_random=False,
-            down_dims=config.dp_down_dims,
-            kernel_size=config.dp_kernel_size,
-            n_groups=config.dp_n_groups,
-            diffusion_step_embed_dim=config.dp_diffusion_step_embed_dim,
-            optimizer_lr=config.dp_optimizer_lr,
-            
-            
+            down_dims=(128,256,512),
+            kernel_size=3,
+            n_groups=8,
+            diffusion_step_embed_dim=128,
+            optimizer_lr=1e-4,
         ),
         eval=EvalConfig(n_episodes=20, batch_size=10),
         env=env_config,
-        wandb=WandBConfig(enable=True, disable_artifact=True,project="camera-placement"),
-        output_dir=Path(f"tmp/outputs/train/{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"), 
-        job_name=f"metaworld-sweep",
+        wandb=WandBConfig(enable=True, disable_artifact=True, project="camera-placement"),
+        output_dir=base_data_dir / "outputs" / "train" / datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S'),
+        job_name=f"metaworld-singlecam-sweep",
         resume=False,
         seed=config.seed,
         num_workers=4,
@@ -150,22 +142,20 @@ def run(config: Config):
         save_freq=config.n_steps
     )
 
-    # train policy
+    # Update train config from wandb sweep config if present
     wandb.config.update(vars(train_config))
     print(train_config)
     train(train_config)
 
-    # remove temp dataset
+    # Clean up dataset after training
     shutil.rmtree(dataset_path)
 
 
-
 if __name__ == "__main__":
-
-    # create new wandb run
     config = Config()
-    import wandb 
-    wandb.init(project="camera-placement", name="metaworld-DP-sweep", config=vars(config))
-    # updated config with wandb config in case of sweep
+    wandb.init(project="camera-placement", name=f"1cam-sweep-{config.wandb_name()}", config=vars(config))
     config = Config(**wandb.config)
     run(config)
+
+
+
