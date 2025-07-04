@@ -125,7 +125,7 @@ def run(config: Config):
             kernel_size=3,
             n_groups=8,
             diffusion_step_embed_dim=128,
-            optimizer_lr=1e-4,
+            optimizer_lr=2e-4,
         ),
         eval=EvalConfig(n_episodes=20, batch_size=10),
         env=env_config,
@@ -155,6 +155,8 @@ if __name__ == "__main__":
     config = Config()
     wandb.init(project="camera-placement", name=f"1cam-sweep-{config.wandb_name()}", config=vars(config))
     config = Config(**wandb.config)
+    # update wandb run name to include camera config
+    wandb.run.name = f"1cam-sweep-{config.wandb_name()}"
     run(config)
 
 
