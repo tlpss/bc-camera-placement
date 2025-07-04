@@ -139,7 +139,7 @@ def run(config: Config):
         steps=config.n_steps,
         eval_freq=config.eval_freq,
         log_freq=config.log_freq,
-        save_freq=config.n_steps
+        save_freq= 2*config.n_steps # don't save intermediate checkpoints
     )
 
     # Update train config from wandb sweep config if present
@@ -149,6 +149,9 @@ def run(config: Config):
 
     # Clean up dataset after training
     shutil.rmtree(dataset_path)
+    # remove the output dir checkpoints
+    if train_config.output_dir:
+        shutil.rmtree(str(train_config.output_dir/ "checkpoints"))
 
 
 if __name__ == "__main__":
